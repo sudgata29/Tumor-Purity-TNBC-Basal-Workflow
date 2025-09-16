@@ -142,7 +142,6 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 
 1. Yoshihara K. *et al.*, **Inferring tumor purity and stromal/immune cell admixture from expression data**, Nat Commun, 2013.  
 2. TCGA Biolinks: [https://bioconductor.org/packages/release/bioc/html/TCGAbiolinks.html](https://bioconductor.org/packages/release/bioc/html/TCGAbiolinks.html)  
-3. PurIST TNBC classification: [Original Publication / Protocol Link]
 
 ---
 
