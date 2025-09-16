@@ -318,22 +318,22 @@ ggsave("TNBC_Volcano_High_vs_LowPurity.png", width = 7, height = 6)
 
 library(dplyr)
 
-# --- 1. Extract only the ESTIMATEScore row ---
+# 1. Extract only the ESTIMATEScore row
 estimate_scores_clean <- estimate_scores %>%
   filter(NAME == "ESTIMATEScore") %>%
   select(-NAME, -Description, -Description.1)  # remove metadata columns
 
-# --- 2. Convert from wide to long format ---
+# 2. Convert from wide to long format
 purity_df <- estimate_scores_clean %>%
   tidyr::pivot_longer(cols = everything(),
                       names_to = "Sample",
                       values_to = "ESTIMATEScore")
 
-# --- 3. Remove any non-TCGA or invalid samples (if needed) ---
+# 3. Remove any non-TCGA or invalid samples (if needed)
 # Example: remove "Description-1" if it exists
 purity_df <- purity_df %>% filter(grepl("^TCGA", Sample))
 
-# --- 4. Create Purity_Group based on median ---
+# 4. Create Purity_Group based on median 
 purity_df <- purity_df %>%
   mutate(Purity_Group = ifelse(ESTIMATEScore >= median(ESTIMATEScore, na.rm = TRUE),"HighPurity", "LowPurity"))
 
@@ -346,10 +346,10 @@ library(dplyr)
 library(cluster)  # for clustering if needed
 library(factoextra) # optional, for visualizing clusters
 
-# --- Step 1: Variance stabilizing transform ---
+# Step 1: Variance stabilizing transform
 vsd <- vst(dds, blind = FALSE)
 
-# --- Step 2: Ensure there is a column for PCA grouping ---
+# Step 2: Ensure there is a column for PCA grouping
 # If you have a Purity_Group column from your purity estimates:
 # Add to colData(dds) if not already there
 colData(dds)$Purity_Group <- purity_df_clean$Purity_Group[match(rownames(colData(dds)), purity_df_clean$Sample)]
@@ -357,16 +357,16 @@ colData(dds)$Purity_Group <- purity_df_clean$Purity_Group[match(rownames(colData
 # If still NA, fill with a placeholder
 colData(dds)$Purity_Group[is.na(colData(dds)$Purity_Group)] <- "Unknown"
 
-# --- Step 3: Perform PCA ---
+# Step 3: Perform PCA
 pcaData <- plotPCA(vsd, intgroup = "Purity_Group", returnData = TRUE)
 percentVar <- round(100 * attr(pcaData, "percentVar"))
 
-# --- Step 4: K-means clustering on first 2 PCs ---
+# Step 4: K-means clustering on first 2 PCs
 set.seed(123)  # for reproducibility
 km_res <- kmeans(pcaData[, c("PC1", "PC2")], centers = 2)
 pcaData$Cluster <- factor(km_res$cluster)
 
-# --- Step 5: Plot PCA with clusters ---
+# Step 5: Plot PCA with clusters
 pca_plot <- ggplot(pcaData, aes(x = PC1, y = PC2, color = Cluster, shape = Purity_Group)) +
   geom_point(size = 3, alpha = 0.8) +
   xlab(paste0("PC1: ", percentVar[1], "% variance")) +
@@ -382,23 +382,23 @@ ggsave("TNBC_PCA_Kmeans_Purity.png", width = 6, height = 5)
 library(mclust)  # for adjustedRandIndex
 library(dplyr)
 
-# --- 1. Use first 2 PCs for clustering ---
+# 1. Use first 2 PCs for clustering
 pca_coords <- pcaData[, c("PC1", "PC2")]
 
-# --- 2. Run k-means with 2 clusters ---
+# 2. Run k-means with 2 clusters
 set.seed(123)  # reproducible
 kmeans_res <- kmeans(pca_coords, centers = 2, nstart = 25)
 
-# --- 3. Compare k-means clusters with Purity_Group ---
+# 3. Compare k-means clusters with Purity_Group
 cluster_table <- table(Purity_Group = pcaData$Purity_Group,
                        KMeans_Cluster = kmeans_res$cluster)
 print(cluster_table)
 
-# --- 4. Compute Adjusted Rand Index ---
+# 4. Compute Adjusted Rand Index
 ari <- adjustedRandIndex(kmeans_res$cluster, as.numeric(factor(pcaData$Purity_Group)))
 cat("Adjusted Rand Index (ARI):", ari, "\n")
 
-# --- 5. Add cluster info to PCA data for plotting ---
+# 5. Add cluster info to PCA data for plotting
 pcaData$KMeans_Cluster <- factor(kmeans_res$cluster)
 
 pca_plot_only <- ggplot(pcaData, aes(PC1, PC2, color = KMeans_Cluster, shape = Purity_Group)) +
