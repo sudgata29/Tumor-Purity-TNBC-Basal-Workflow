@@ -1,0 +1,709 @@
+---
+title: "PurIST TNBC Basal"
+output: html_document
+date: "2025-09-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+library(TCGAbiolinks)
+library(dplyr)
+library(DESeq2)
+library(ggplot2)
+library(matrixStats)
+library(tibble)
+library(estimate)   # For ESTIMATE scores
+
+
+library(data.table)
+
+# Load only numeric matrix, keep first column for Ensembl IDs
+expr <- fread("TCGA-BRCA.star_fpkm-uq.tsv.gz")
+
+gene_ids <- gsub("\\..*", "", expr[[1]])  # strip versions
+expr_mat <- as.matrix(expr[,-1])
+rownames(expr_mat) <- gene_ids
+rm(expr)
+
+
+# Collapse duplicate Ensembl IDs (memory-efficient)
+
+# Make sure dup_counts is a numeric named vector
+dup_counts_vec <- as.numeric(dup_counts)
+names(dup_counts_vec) <- names(dup_counts)
+
+# Reorder to match expr_collapsed rownames
+dup_counts_vec <- dup_counts_vec[rownames(expr_collapsed)]
+
+# Divide
+expr_collapsed <- expr_collapsed / dup_counts_vec
+
+rm(expr_mat, dup_counts)  # free memory
+
+# Map Ensembl IDs → HGNC symbols (GENCODE v22)
+
+gtf <- rtracklayer::import("gencode.v22.annotation.gtf.gz")
+genes <- as.data.frame(gtf[gtf$type=="gene", c("gene_id","gene_name")])
+genes$gene_id <- gsub("\\..*", "", genes$gene_id)
+
+expr_hgnc <- expr_collapsed[rownames(expr_collapsed) %in% genes$gene_id, ]
+rownames(expr_hgnc) <- genes$gene_name[match(rownames(expr_hgnc), genes$gene_id)]
+
+
+# Remove any remaining duplicates
+expr_hgnc <- expr_hgnc[!duplicated(rownames(expr_hgnc)), ]
+rm(expr_collapsed, genes)  # free memory
+
+
+# Load TCGA PAM50 clinical data for TNBC
+
+library(TCGAbiolinks)
+clin <- TCGAquery_subtype(tumor = "BRCA")  # PAM50 labels
+
+# Select Basal-like / TNBC samples
+tnbc_samples <- clin[clin$BRCA_Subtype_PAM50 %in% c("Basal", "Basal-like"), ]
+tnbc_patient_ids <- tnbc_samples$patient
+
+# Match patient IDs to expression columns
+expr_patient_ids <- substr(colnames(expr_hgnc), 1, 12)  # first 12 chars = patient ID
+common_patients <- intersect(expr_patient_ids, tnbc_patient_ids)
+expr_tnbc <- expr_hgnc[, expr_patient_ids %in% common_patients]
+
+cat("Number of TNBC samples:", ncol(expr_tnbc), "\n")
+
+# Make sure rownames are HGNC symbols
+expr_tnbc <- as.data.frame(expr_tnbc)  # ensure it's a data frame
+
+# Create GCT table
+gct_df <- expr_tnbc %>%
+  mutate(GeneSymbol = rownames(expr_tnbc),
+         Description = rownames(expr_tnbc)) %>%
+  select(GeneSymbol, Description, everything())
+
+#  Write PurIST-ready GCT
+write_purist_gct <- function(gct_df, file_path) {
+  # First header line
+  header1 <- "#1.2"
+  
+  # Second header line: number of genes (rows) and number of samples (columns)
+  # exclude the first two columns (GeneSymbol + Description) from column count
+  nrows <- nrow(gct_df)
+  ncols <- ncol(gct_df) - 2
+  header2 <- paste(nrows, ncols, sep = "\t")
+  
+  # Write headers
+  con <- file(file_path, open = "w")
+  writeLines(header1, con)
+  writeLines(header2, con)
+  close(con)
+  
+  # Append the data
+  write.table(gct_df, file = file_path, sep = "\t", quote = FALSE,
+              row.names = FALSE, col.names = TRUE, append = TRUE)
+}
+
+# Write the PurIST-ready GCT
+write_purist_gct(gct_df, "tnbc_expr.gct")
+
+
+#--------------------------------------------
+
+library(estimate)
+
+scores <- read.table("tnbc_expr.gct", skip = 2,
+                     header = TRUE,  # third line has column names
+                     sep = "\t",
+                     check.names = FALSE,
+                     stringsAsFactors = FALSE)
+
+head(scores)
+
+# Filter genes
+filterCommonGenes(input.f = "tnbc_expr.gct",
+                  output.f = "tnbc_filtered.gct",
+                  id = "GeneSymbol")
+
+# Estimate subtype scores
+estimateScore("tnbc_filtered.gct", "tnbc_scores.gct")
+
+# Read PurIST results
+purist_results <- read.table("tnbc_scores.gct",
+                             header = TRUE,
+                             sep = "\t",
+                             check.names = FALSE,
+                             stringsAsFactors = FALSE)
+
+head(purist_results)
+
+# Skip the first two header lines
+estimate_scores <- read.table(
+  "tnbc_scores.gct",
+  skip = 2,
+  header = TRUE,
+  sep = "\t",
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+# Quick check
+head(estimate_scores[,1:5])
+
+# Trim any extra whitespace in NAME
+estimate_scores$NAME <- trimws(estimate_scores$NAME)
+
+# Subset the ESTIMATEScore row
+est_scores <- estimate_scores[estimate_scores$NAME == "ESTIMATEScore", ]
+
+sample_names <- colnames(est_scores)[3:ncol(est_scores)]
+scores_numeric <- as.numeric(est_scores[1, 3:ncol(est_scores)])
+names(scores_numeric) <- sample_names
+
+# Optional: check values
+head(scores_numeric)
+
+
+high_purity_samples <- names(scores_numeric)[ scores_numeric >= median(scores_numeric) ]
+length(high_purity_samples)
+
+# Make both use dashes
+high_purity_samples_clean <- gsub("\\.", "-", high_purity_samples)
+
+# Now intersect
+common_samples <- intersect(colnames(expr_tnbc), high_purity_samples_clean)
+
+# Subset expression to high-purity only
+expr_high <- expr_tnbc[, colnames(expr_tnbc) %in% common_samples]
+
+cat("Number of matched high-purity samples:", ncol(expr_high), "\n")
+
+#--------------------------------------------
+# Pull tumor purity scores
+purity_row <- estimate_scores[estimate_scores$NAME == "TumorPurity", ]
+
+# Transpose to get Sample to Purity mapping
+purity_df <- data.frame(
+  Sample = colnames(purity_row)[-c(1:2)],   # skip NAME/Description columns
+  Purity = as.numeric(purity_row[-c(1:2)])
+)
+
+purity_df$Sample <- gsub("\\.", "-", purity_df$Sample)
+
+
+common_samples <- intersect(colnames(expr_tnbc), purity_df$Sample)
+expr_sub <- expr_tnbc[, common_samples]
+
+purity_df <- purity_df[match(colnames(expr_sub), purity_df$Sample), ]
+
+library(DESeq2)
+
+# 1. Extract Tumor Purity row
+purity_row <- estimate_scores[estimate_scores$NAME == "TumorPurity", ]
+
+# 2. Build sample → purity mapping
+purity_df <- data.frame(
+  Sample = colnames(purity_row)[-c(1:2)],   # skip NAME + Description
+  Purity = as.numeric(purity_row[-c(1:2)])
+)
+
+# 3. Fix sample ID format (replace . with - to match TCGA barcodes)
+purity_df$Sample <- gsub("\\.", "-", purity_df$Sample)
+
+# 4. Keep only samples in TNBC expression matrix
+common_samples <- intersect(colnames(expr_tnbc), purity_df$Sample)
+expr_sub <- expr_tnbc[, common_samples]
+
+# reorder purity_df to match expr_sub column order
+purity_df <- purity_df[match(colnames(expr_sub), purity_df$Sample), ]
+
+# 5. Define high vs low purity (median split)
+cutoff <- median(purity_df$Purity, na.rm = TRUE)
+purity_df$Group <- ifelse(purity_df$Purity >= cutoff, "HighPurity", "LowPurity")
+
+# 6. Prepare DESeq2 dataset
+dds <- DESeqDataSetFromMatrix(
+  countData = round(expr_sub),   # ensure integer counts
+  colData   = data.frame(Group = purity_df$Group, row.names = purity_df$Sample),
+  design    = ~ Group
+)
+
+# 7. Run DESeq2
+dds <- DESeq(dds)
+res <- results(dds, contrast = c("Group", "HighPurity", "LowPurity"))
+
+# 8. Order by adjusted p-value
+res_ordered <- res[order(res$padj), ]
+head(res_ordered)
+
+# 9. Save results
+write.csv(as.data.frame(res_ordered), "TNBC_DESeq2_High_vs_LowPurity.csv")
+
+
+#--------------------------------------------
+library(DESeq2)
+library(ggplot2)
+library(EnhancedVolcano)
+
+### PCA plot
+vsd <- vst(dds, blind = FALSE)   # variance-stabilizing transform
+pcaData <- plotPCA(vsd, intgroup = "Group", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+pca_plot <- ggplot(pcaData, aes(PC1, PC2, color = Group)) +
+  geom_point(linewidth = 3, alpha = 0.8) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_bw(base_size = 14) +
+  ggtitle("PCA of TNBC Samples by Purity Group")
+
+pca_plot
+
+';[psdewr56ggsave("TNBC_PCA_High_vs_LowPurity.png", width = 6, height = 5)
+
+# Run k-means clustering on PC1 and PC2
+set.seed(123)
+kmeans_res <- kmeans(pcaData[, c("PC1", "PC2")], centers = 2, nstart = 25)
+
+# Add cluster assignments
+pcaData$Cluster <- as.factor(kmeans_res$cluster)
+
+# Combined plot: Purity (color) vs Clusters (shape)
+pca_compare_plot <- ggplot(pcaData, aes(PC1, PC2, color = Group, shape = Cluster)) +
+  geom_point(linewidth = 3, alpha = 0.9) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_bw(base_size = 14) +
+  ggtitle("PCA of TNBC Samples: Purity Groups vs K-means Clusters") +
+  scale_shape_manual(values = c(16, 17)) # circle & triangle for clusters
+
+pca_compare_plot
+
+# Save
+ggsave("TNBC_PCA_Purity_vs_Kmeans.png", pca_compare_plot, width = 7, height = 6)
+
+library(caret)    # for confusionMatrix
+library(mclust)   # for adjustedRandIndex
+
+# Confusion matrix between Group (High/Low Purity) and Cluster
+conf_mat <- table(Purity_Group = pcaData$Group, KMeans_Cluster = pcaData$Cluster)
+print(conf_mat)
+
+# Adjusted Rand Index (ranges -1 to 1, with 1 = perfect agreement)
+ari <- adjustedRandIndex(pcaData$Group, pcaData$Cluster)
+cat("Adjusted Rand Index (ARI):", ari, "\n")
+
+
+### Volcano plot
+volcano_plot <- EnhancedVolcano(
+  res,
+  lab = rownames(res),
+  x = "log2FoldChange",
+  y = "pvalue",
+  xlim = c(-5, 5),
+  title = "TNBC: High vs Low Purity",
+  subtitle = "DESeq2 results",
+  pCutoff = 0.05,
+  FCcutoff = 1.0,
+  pointSize = 2.0,
+  labSize = 3.0
+)
+
+volcano_plot
+
+# Save
+ggsave("TNBC_Volcano_High_vs_LowPurity.png", width = 7, height = 6)
+
+#--------------------------------------------
+
+library(dplyr)
+
+# --- 1. Extract only the ESTIMATEScore row ---
+estimate_scores_clean <- estimate_scores %>%
+  filter(NAME == "ESTIMATEScore") %>%
+  select(-NAME, -Description, -Description.1)  # remove metadata columns
+
+# --- 2. Convert from wide to long format ---
+purity_df <- estimate_scores_clean %>%
+  tidyr::pivot_longer(cols = everything(),
+                      names_to = "Sample",
+                      values_to = "ESTIMATEScore")
+
+# --- 3. Remove any non-TCGA or invalid samples (if needed) ---
+# Example: remove "Description-1" if it exists
+purity_df <- purity_df %>% filter(grepl("^TCGA", Sample))
+
+# --- 4. Create Purity_Group based on median ---
+purity_df <- purity_df %>%
+  mutate(Purity_Group = ifelse(ESTIMATEScore >= median(ESTIMATEScore, na.rm = TRUE),"HighPurity", "LowPurity"))
+
+# Now this is your 'purity_df_clean'
+purity_df_clean <- purity_df
+
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(cluster)  # for clustering if needed
+library(factoextra) # optional, for visualizing clusters
+
+# --- Step 1: Variance stabilizing transform ---
+vsd <- vst(dds, blind = FALSE)
+
+# --- Step 2: Ensure there is a column for PCA grouping ---
+# If you have a Purity_Group column from your purity estimates:
+# Add to colData(dds) if not already there
+colData(dds)$Purity_Group <- purity_df_clean$Purity_Group[match(rownames(colData(dds)), purity_df_clean$Sample)]
+
+# If still NA, fill with a placeholder
+colData(dds)$Purity_Group[is.na(colData(dds)$Purity_Group)] <- "Unknown"
+
+# --- Step 3: Perform PCA ---
+pcaData <- plotPCA(vsd, intgroup = "Purity_Group", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+# --- Step 4: K-means clustering on first 2 PCs ---
+set.seed(123)  # for reproducibility
+km_res <- kmeans(pcaData[, c("PC1", "PC2")], centers = 2)
+pcaData$Cluster <- factor(km_res$cluster)
+
+# --- Step 5: Plot PCA with clusters ---
+pca_plot <- ggplot(pcaData, aes(x = PC1, y = PC2, color = Cluster, shape = Purity_Group)) +
+  geom_point(size = 3, alpha = 0.8) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_bw(base_size = 14) +
+  ggtitle("PCA of TNBC Samples with K-means Clusters and Purity Grouping")
+
+pca_plot
+ggsave("TNBC_PCA_Kmeans_Purity.png", width = 6, height = 5)
+
+
+#--------------------------------------------
+library(mclust)  # for adjustedRandIndex
+library(dplyr)
+
+# --- 1. Use first 2 PCs for clustering ---
+pca_coords <- pcaData[, c("PC1", "PC2")]
+
+# --- 2. Run k-means with 2 clusters ---
+set.seed(123)  # reproducible
+kmeans_res <- kmeans(pca_coords, centers = 2, nstart = 25)
+
+# --- 3. Compare k-means clusters with Purity_Group ---
+cluster_table <- table(Purity_Group = pcaData$Purity_Group,
+                       KMeans_Cluster = kmeans_res$cluster)
+print(cluster_table)
+
+# --- 4. Compute Adjusted Rand Index ---
+ari <- adjustedRandIndex(kmeans_res$cluster, as.numeric(factor(pcaData$Purity_Group)))
+cat("Adjusted Rand Index (ARI):", ari, "\n")
+
+# --- 5. Add cluster info to PCA data for plotting ---
+pcaData$KMeans_Cluster <- factor(kmeans_res$cluster)
+
+pca_plot_only <- ggplot(pcaData, aes(PC1, PC2, color = KMeans_Cluster, shape = Purity_Group)) +
+  geom_point(size = 3, alpha = 0.8) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_bw(base_size = 14) +
+  ggtitle("PCA of TNBC Samples: KMeans vs Purity Groups")
+  
+pca_plot_only
+
+#--------------------------------------------
+library(estimate)
+library(dplyr)
+library(survival)
+library(survminer)
+
+# Filter genes to match ESTIMATE requirements
+filterCommonGenes(input.f = "tnbc_expr.gct", output.f = "tnbc_filtered.gct", id = "GeneSymbol")
+
+# Compute ESTIMATE scores
+estimateScore(input.ds = "tnbc_filtered.gct", output.ds = "tnbc_scores.gct")
+
+
+# Skip first 2 lines (GCT format metadata)
+estimate_scores <- read.table("tnbc_scores.gct", skip = 2, header = TRUE, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
+
+# Check
+head(estimate_scores)
+
+
+
+# Find the row corresponding to ESTIMATEScore
+est_row <- estimate_scores[estimate_scores$NAME == "ESTIMATEScore", ]
+
+# est_row now has: NAME, Description, sample1, sample2, ...
+
+# Purity calculation (Yoshihara formula)
+purity_values <- as.numeric(est_row[,-c(1,2)])  # remove NAME + Description columns
+names(purity_values) <- colnames(est_row)[-c(1,2)]
+
+purity_vector <- cos(0.6049872018 + 0.0001467884 * purity_values)
+
+
+# Extract patient IDs (first 12 characters of sample names)
+purity_df <- data.frame(
+  patient = substr(names(purity_vector), 1, 12),
+  Purity = purity_vector
+)
+
+
+# Filter for Basal-like / TNBC
+tnbc_clin <- clin %>% filter(BRCA_Subtype_PAM50 %in% c("Basal", "Basal-like"))
+
+
+# Extract first 12 characters from purity sample names (standard TCGA patient IDs)
+purity_df$patient <- substr(gsub("\\.", "-", names(purity_vector)), 1, 12)
+
+# Ensure clinical TNBC patient IDs are first 12 characters too
+tnbc_clin$patient <- substr(tnbc_clin$patient, 1, 12)
+
+# Now merge
+surv_df <- tnbc_clin %>%
+  left_join(purity_df, by = "patient") %>%
+  filter(!is.na(Purity))
+
+dim(surv_df)
+head(surv_df)
+
+surv_df <- surv_df %>%
+  mutate(Purity_group = ifelse(Purity >= median(Purity), "High", "Low"))
+
+
+# Convert time columns to numeric
+surv_df$days_to_death <- as.numeric(surv_df$days_to_death)
+surv_df$days_to_last_followup <- as.numeric(surv_df$days_to_last_followup)
+
+# Optional: check for NAs
+sum(is.na(surv_df$days_to_death))
+sum(is.na(surv_df$days_to_last_followup))
+
+# Create survival time: use days_to_death if dead, else days_to_last_followup
+surv_time <- ifelse(surv_df$vital_status == "Dead",
+                    surv_df$days_to_death,
+                    surv_df$days_to_last_followup)
+
+# Ensure no NAs in time
+surv_time <- na.omit(surv_time)
+
+# Event indicator: 1 if dead, 0 otherwise
+event <- ifelse(surv_df$vital_status == "Dead", 1, 0)
+
+# Create survival object
+surv_obj <- Surv(time = surv_time, event = event)
+
+
+fit <- survfit(surv_obj ~ Purity_group, data = surv_df)
+
+KM_plot <- ggsurvplot(
+  fit,
+  data = surv_df,
+  pval = TRUE,
+  risk.table = TRUE,
+  palette = c("red", "blue"),
+  title = "TNBC Survival by Tumor Purity",
+  xlab = "Days",
+  ylab = "Survival Probability"
+)
+
+KM_plot
+
+#--------------------------------------------
+library(dplyr)
+library(survival)
+library(survminer)
+
+
+# 1. Ensure age is numeric
+
+surv_df$age <- as.numeric(surv_df$age_at_initial_pathologic_diagnosis)
+
+# Check summary
+summary(surv_df$age)
+
+
+# 2. Optional: dichotomize age
+
+# Median split
+surv_df$age_group <- ifelse(surv_df$age >= median(surv_df$age, na.rm = TRUE), "Older", "Younger")
+
+
+# 3. Create survival object (OS)
+
+surv_df$surv_time <- ifelse(surv_df$vital_status == "Dead",
+                            as.numeric(surv_df$days_to_death),
+                            as.numeric(surv_df$days_to_last_followup))
+
+surv_df$event <- ifelse(surv_df$vital_status == "Dead", 1, 0)
+
+surv_obj <- Surv(time = surv_df$surv_time, event = surv_df$event)
+
+
+# 4. Fit Kaplan-Meier curve by age group
+
+fit_age <- survfit(surv_obj ~ age_group, data = surv_df)
+
+
+# 5. Plot KM curve
+
+age_KM_plot <- ggsurvplot(
+  fit_age,
+  data = surv_df,
+  pval = TRUE,
+  risk.table = TRUE,
+  palette = c("blue", "red"),
+  title = "TNBC OS by Age at Diagnosis",
+  xlab = "Days",
+  ylab = "Overall Survival Probability"
+)
+
+age_KM_plot
+
+# 6. Cox model with continuous age
+
+cox_fit_age <- coxph(Surv(surv_time, event) ~ age, data = surv_df)
+summary(cox_fit_age)
+
+#--------------------------------------------
+library(dplyr)
+library(survival)
+library(survminer)
+
+
+# 1. Prepare survival dataframe
+
+surv_df <- surv_df %>%
+  mutate(
+    age = as.numeric(age_at_initial_pathologic_diagnosis),
+    Purity = as.numeric(Purity),
+    surv_time = ifelse(vital_status == "Dead", as.numeric(days_to_death), as.numeric(days_to_last_followup)),
+    event = ifelse(vital_status == "Dead", 1, 0)
+  ) %>%
+  filter(!is.na(surv_time) & !is.na(event) & !is.na(age) & !is.na(Purity))
+
+
+# 2. Dichotomize age at 50 and purity at median
+
+purity_median <- median(surv_df$Purity, na.rm = TRUE)
+
+surv_df <- surv_df %>%
+  mutate(
+    age_group = ifelse(age >= 50, "Older", "Younger"),
+    purity_group = ifelse(Purity >= purity_median, "High", "Low"),
+    combined_group = factor(paste0(age_group, "_", purity_group),
+                            levels = c("Younger_Low", "Younger_High", "Older_Low", "Older_High"))
+  )
+
+
+# 3. Cox model with combined group
+
+cox_fit <- coxph(Surv(surv_time, event) ~ combined_group, data = surv_df)
+summary(cox_fit)
+
+
+# 4. Fit Kaplan-Meier curves
+
+fit_combined <- survfit(Surv(surv_time, event) ~ combined_group, data = surv_df)
+
+
+# 5. Plot KM curves
+
+km_plot_2 <- ggsurvplot(
+  fit_combined,
+  data = surv_df,
+  pval = TRUE,
+  risk.table = TRUE,
+  palette = c("blue", "skyblue", "red", "pink"),
+  title = "TNBC Overall Survival by Age (>50/<50) and Tumor Purity",
+  xlab = "Days",
+  ylab = "Overall Survival Probability",
+  legend.title = "Group",
+  legend.labs = c("Younger_Low", "Younger_High", "Older_Low", "Older_High"),
+  risk.table.height = 0.25,
+  surv.median.line = "hv"
+)
+
+print(km_plot_2)
+
+#--------------------------------------------
+library(survival)
+library(survminer)
+library(dplyr)
+
+
+# Ensure combined_group is a factor
+
+surv_df$combined_group <- factor(surv_df$combined_group,
+                                 levels = c("Younger_Low", "Younger_High",
+                                            "Older_Low", "Older_High"))
+
+
+# Fit Cox model for HRs
+
+cox_fit <- coxph(Surv(surv_time, event) ~ combined_group, data = surv_df)
+cox_summary <- summary(cox_fit)
+
+# Extract HRs and 95% CI
+hr_df <- data.frame(
+  group = rownames(cox_summary$coef),
+  HR = cox_summary$coef[, "exp(coef)"],
+  lower95 = cox_summary$conf.int[, "lower .95"],
+  upper95 = cox_summary$conf.int[, "upper .95"],
+  pvalue = cox_summary$coef[, "Pr(>|z|)"]
+)
+
+
+# Fit Kaplan-Meier curves
+
+fit_km <- survfit(Surv(surv_time, event) ~ combined_group, data = surv_df)
+
+
+# Plot KM curves with HR labels
+
+km_plot_3 <- ggsurvplot(
+  fit_km,
+  data = surv_df,
+  risk.table = TRUE,
+  pval = TRUE,
+  palette = c("skyblue", "blue", "pink", "red"),
+  title = "TNBC Overall Survival by Age and Tumor Purity",
+  xlab = "Days",
+  ylab = "Overall Survival Probability",
+  legend.title = "Group",
+  legend.labs = c("Younger_Low", "Younger_High", "Older_Low", "Older_High"),
+  risk.table.height = 0.25,
+  surv.median.line = "hv"
+)
+
+print(km_plot_3)
+
+# add HR labels on plot
+
+hr_labels <- paste0(hr_df$group, ": HR=", round(hr_df$HR,2),
+                    " (", round(hr_df$lower95,2), "-", round(hr_df$upper95,2), ")")
+
+km_plot_4 <- km_plot_3$plot + 
+  annotate("text", x = max(surv_df$surv_time)*0.7, y = seq(0.3, 0.6, length.out = 3),
+           label = hr_labels, hjust = 0)
+
+print(km_plot_4)
+
+### Plot KM curves with risk table and p-value
+km_plot_5 <- ggsurvplot(
+  fit_km,
+  data = surv_df,
+  risk.table = TRUE,
+  pval = TRUE,
+  palette = c("skyblue", "blue", "pink", "red"),
+  title = "TNBC Overall Survival by Age and Tumor Purity",
+  xlab = "Days",
+  ylab = "Overall Survival Probability",
+  legend.title = "Group",
+  legend.labs = c("Younger_Low", "Younger_High", "Older_Low", "Older_High"),
+  risk.table.height = 0.25,
+  surv.median.line = "hv"
+)
+
+print(km_plot_5)
