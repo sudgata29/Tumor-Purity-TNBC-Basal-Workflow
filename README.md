@@ -1,4 +1,6 @@
-# PurIST TNBC Basal Workflow
+# Tumor Purity Classification for Basal Triple-Negative Breast Cancer Workflow
+
+[![R](https://img.shields.io/badge/R-4.2+-blue.svg)](https://www.r-project.org/)  
 
 This repository contains a complete workflow for analyzing **Triple-Negative Breast Cancer (TNBC) Basal-like samples** using TCGA data. It includes preprocessing, tumor purity estimation, DESeq2 differential expression analysis, PCA, clustering, and survival analyses.
 
@@ -36,10 +38,11 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 
 ## Data
 
-- **Expression data:** `TCGA-BRCA.star_fpkm-uq.tsv.gz`
-- **GTF annotation:** `gencode.v22.annotation.gtf.gz`
+- **Expression data:** `Files/TCGA-BRCA.star_fpkm-uq.tsv.gz`
+- **GTF annotation:** `Files/gencode.v22.annotation.gtf.gz`
 - **Clinical / PAM50 data:** Retrieved using `TCGAbiolinks::TCGAquery_subtype()`
-- **PurIST-ready GCT files:** `tnbc_expr.gct`, `tnbc_filtered.gct`
+- **PurIST-ready GCT files:** `Files/tnbc_expr.gct`, `Files/tnbc_filtered.gct`
+- **DESeq2 results:** `Files/TNBC_DESeq2_High_vs_LowPurity.csv`
 
 ---
 
@@ -51,7 +54,7 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 - Collapse duplicate Ensembl IDs.
 - Map Ensembl IDs → HGNC symbols.
 - Filter for TNBC Basal-like patients.
-- Generate PurIST-ready GCT file: [`tnbc_expr.gct`](tnbc_expr.gct)
+- Generate PurIST-ready GCT file: [`Files/tnbc_expr.gct`](Files/tnbc_expr.gct)
 
 ---
 
@@ -69,7 +72,7 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 - Run DESeq2 and extract results.
 - Save DESeq2 results:
 
-[`TNBC_DESeq2_High_vs_LowPurity.csv`](TNBC_DESeq2_High_vs_LowPurity.csv)
+[`Files/TNBC_DESeq2_High_vs_LowPurity.csv`](Files/TNBC_DESeq2_High_vs_LowPurity.csv)
 
 ---
 
@@ -79,9 +82,9 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 - PCA plot colored by **Purity_Group** and K-means clusters.
 - Example figures:
 
-[`TNBC_PCA_High_vs_LowPurity.png`](TNBC_PCA_High_vs_LowPurity.png)  
-[`TNBC_PCA_Purity_vs_Kmeans.png`](TNBC_PCA_Purity_vs_Kmeans.png)  
-[`TNBC_PCA_Kmeans_Purity.png`](TNBC_PCA_Kmeans_Purity.png)
+[`Figures/TNBC_PCA_High_vs_LowPurity.png`](Figures/TNBC_PCA_High_vs_LowPurity.png)  
+[`Figures/TNBC_PCA_Purity_vs_Kmeans.png`](Figures/TNBC_PCA_Purity_vs_Kmeans.png)  
+[`Figures/TNBC_PCA_Kmeans_Purity.png`](Figures/TNBC_PCA_Kmeans_Purity.png)
 
 - Adjusted Rand Index (ARI) calculated to compare clusters with purity groups.
 
@@ -92,7 +95,7 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 - Visualize DE genes between High and Low Purity groups.
 - Figure:
 
-[`TNBC_Volcano_High_vs_LowPurity.png`](TNBC_Volcano_High_vs_LowPurity.png)
+[`Figures/TNBC_Volcano_High_vs_LowPurity.png`](Figures/TNBC_Volcano_High_vs_LowPurity.png)
 
 ---
 
@@ -105,9 +108,9 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 - Cox proportional hazards modeling for HR estimation.
 - Example KM plots:
 
-- [`TNBC_Survival_Purity.png`](figures/TNBC_Survival_Purity.png)  
-- [`TNBC_Survival_Age.png`](figures/TNBC_Survival_Age.png)  
-- [`TNBC_Survival_Combined.png`](figures/TNBC_Survival_Combined.png)
+[`Figures/TNBC_Survival_Purity.png`](Figures/TNBC_Survival_Purity.png)  
+[`Figures/TNBC_Survival_Age.png`](Figures/TNBC_Survival_Age.png)  
+[`Figures/TNBC_Survival_Combined.png`](Figures/TNBC_Survival_Combined.png)
 
 ---
 
@@ -115,12 +118,12 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 
 | Figure | Description |
 |--------|-------------|
-| PCA High vs Low Purity | [`TNBC_PCA_High_vs_LowPurity.png`](TNBC_PCA_High_vs_LowPurity.png) |
-| PCA Purity vs K-means | [`TNBC_PCA_Purity_vs_Kmeans.png`](TNBC_PCA_Purity_vs_Kmeans.png) |
-| Volcano Plot | [`TNBC_Volcano_High_vs_LowPurity.png`](TNBC_Volcano_High_vs_LowPurity.png) |
-| Survival by Purity | [`TNBC_Survival_Purity.png`](figures/TNBC_Survival_Purity.png) |
-| Survival by Age | [`TNBC_Survival_Age.png`](figures/TNBC_Survival_Age.png) |
-| Survival by Combined Group | [`TNBC_Survival_Combined.png`](figures/TNBC_Survival_Combined.png) |
+| PCA High vs Low Purity | [`Figures/TNBC_PCA_High_vs_LowPurity.png`](Figures/TNBC_PCA_High_vs_LowPurity.png) |
+| PCA Purity vs K-means | [`Figures/TNBC_PCA_Purity_vs_Kmeans.png`](Figures/TNBC_PCA_Purity_vs_Kmeans.png) |
+| Volcano Plot | [`Figures/TNBC_Volcano_High_vs_LowPurity.png`](Figures/TNBC_Volcano_High_vs_LowPurity.png) |
+| Survival by Purity | [`Figures/TNBC_Survival_Purity.png`](Figures/TNBC_Survival_Purity.png) |
+| Survival by Age | [`Figures/TNBC_Survival_Age.png`](Figures/TNBC_Survival_Age.png) |
+| Survival by Combined Group | [`Figures/TNBC_Survival_Combined.png`](Figures/TNBC_Survival_Combined.png) |
 
 ---
 
@@ -142,7 +145,8 @@ This workflow processes TNBC basal-like samples from TCGA-BRCA and performs:
 
 1. Yoshihara K. *et al.*, **Inferring tumor purity and stromal/immune cell admixture from expression data**, Nat Commun, 2013.  
 2. TCGA Biolinks: [https://bioconductor.org/packages/release/bioc/html/TCGAbiolinks.html](https://bioconductor.org/packages/release/bioc/html/TCGAbiolinks.html)  
+3. TNBC classification: https://pmc.ncbi.nlm.nih.gov/articles/PMC8242253/ 
 
 ---
 
-*This workflow was developed by Shirsa Udgata for TNBC basal-like analysis with TCGA data and PurIST pipeline integration.*
+*Workflow developed by Shirsa Udgata for TNBC basal-like analysis with TCGA data and Tumor Purity integration.*
